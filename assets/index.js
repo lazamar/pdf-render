@@ -117,7 +117,7 @@ const pageRenderer = (container, page) => {
 const pdfContainer = document.querySelector(".pdf-container");
 
 // Get PDF file from url address
-fetch("./sample-hard.pdf")
+fetch("./sample.pdf")
     .then(r => r.arrayBuffer())
     // Pass PDF data as ArrayBuffer to PDF.js
     .then(a => pdfjsLib.getDocument(a))
