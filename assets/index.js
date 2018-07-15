@@ -1,6 +1,8 @@
 /* globals pdfjsLib */
 /* eslint-disable no-console */
 
+const PAGE_CLASS = "pdf-page";
+const LOADING_CLASS = "pdf-loading";
 // -------------------------- HTML --------------------------
 
 // HTMLElement -> Void
@@ -15,7 +17,7 @@ const removeAllChildren = element => {
 const rangeArray = (from, to) =>
     [...Array(to - from + 1)].map((v, idx) => idx + from);
 
-// Creates one canvas element for each page.
+// Creates one container element for each page.
 // and adds them to the DOM.
 // We do it like this so that we can make sure
 // they are added in the correct order
@@ -24,8 +26,12 @@ const createPagesElements = (pageCount, parent) => {
     removeAllChildren(parent);
 
     return rangeArray(1, pageCount)
-        .map(_ => document.createElement("canvas"))
-        .map(canvas => parent.appendChild(canvas));
+        .map(_ => document.createElement("div"))
+        .map(container => {
+            container.classList.add(PAGE_CLASS);
+            return container;
+        })
+        .map(container => parent.appendChild(container));
 };
 
 // Creates buttons to handle PDF
@@ -80,14 +86,38 @@ const createButtons = (parent, zoom, rotate, blur) => {
 // -------------------------- PDF.js --------------------------
 
 // Renders the page in the given HTMLElement
-// HTMLElement -> Page -> Int -> Future Err HTMLElement
-const renderPage = (canvas, page, scale) => {
-    const viewport = page.getViewport(scale);
-    canvas.height = viewport.height;
-    canvas.width = viewport.width;
-    return page
-        .render({ viewport, canvasContext: canvas.getContext("2d") })
-        .then(() => canvas);
+// HTMLElement -> Page -> Int -> Promise HTMLElement
+const pageRenderer = (container, page) => {
+    let currentRendering;
+
+    return scale => {
+        currentRendering && currentRendering.cancel();
+        // const renderId = Date.now() + Math.random(); // UUID
+        // currentRendering = renderId;
+        container.classList.add(LOADING_CLASS);
+
+        const viewport = page.getViewport(scale);
+        const canvas = document.createElement("canvas");
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+
+        const rendering = page.render({
+            viewport,
+            canvasContext: canvas.getContext("2d")
+        });
+        currentRendering = rendering;
+        rendering
+            .then(() => {
+                if (currentRendering == rendering) {
+                    removeAllChildren(container);
+                    container.appendChild(canvas);
+                    container.classList.remove(LOADING_CLASS);
+                }
+            })
+            // Renders error when they are cancelled so we
+            // can just ignore that.
+            .catch(_ => null);
+    };
 };
 
 // ========= START ========
@@ -96,7 +126,7 @@ const renderPage = (canvas, page, scale) => {
 const pdfContainer = document.querySelector(".pdf-container");
 
 // Get PDF file from url address
-fetch("./sample.pdf")
+fetch("./sample-hard.pdf")
     .then(r => r.arrayBuffer())
     // Pass PDF data as ArrayBuffer to PDF.js
     .then(a => pdfjsLib.getDocument(a))
@@ -105,27 +135,30 @@ fetch("./sample.pdf")
         Promise.all(rangeArray(1, pdf.numPages).map(n => pdf.getPage(n)))
     )
     .then(pages => {
-        // We will create one canvas for each page.
-        const canvasses = createPagesElements(pages.length, pdfContainer);
+        // We will create one container for each page.
+        const containers = createPagesElements(pages.length, pdfContainer);
+
+        const renderers = pages.map((page, idx) =>
+            pageRenderer(containers[idx], page)
+        );
 
         // Each time zoom is called all pages are re-rendered
-        // in their canvas elements.
-        const zoom = val =>
-            pages.map((page, idx) => renderPage(canvasses[idx], page, val));
+        // in their container elements.
+        const zoom = val => renderers.map(r => r(val));
 
         const rotate = val =>
-            canvasses.map(canvas => {
+            containers.map(canvas => {
                 canvas.style.transform = `rotate(${val}deg)`;
             });
 
         const blur = val =>
-            canvasses.map(canvas => {
+            containers.map(canvas => {
                 canvas.style.filter = `blur(${val}px)`;
             });
 
         createButtons(document.body, zoom, rotate, blur);
 
-        // Now that we have the pages and canvasses we can just
+        // Now that we have the pages and containers we can just
         // render them.
         return zoom(1);
     });
