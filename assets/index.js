@@ -1,29 +1,5 @@
-/* globals pdfjsLib, RF */
+/* globals pdfjsLib */
 /* eslint-disable no-console */
-
-// Get the Future monad from Ramada-Fantasy
-const { Future } = RF;
-
-// Transorm a Promise in a Future which, if failed, will
-// error with a given message
-// String -> Promise a -> Future Err a
-const toFuture = (message, promise) =>
-    Future((reject, resolve) =>
-        promise.then(resolve).catch(error => reject({ message, error }))
-    );
-
-// Call Futures in parallel
-// If one fails all fail
-// [Future a] -> Future [a]
-const parallel = futures => {
-    const stop = Date.now() + Math.random(); // UUID
-    const inParallel = acc => future =>
-        future !== stop ? inParallel(acc.concat([future])) : acc;
-
-    return futures
-        .reduce((acc, f) => acc.ap(f), Future.of(inParallel([])))
-        .map(func => func(stop));
-};
 
 // -------------------------- HTML --------------------------
 
@@ -43,7 +19,7 @@ const rangeArray = (from, to) =>
 // and adds them to the DOM.
 // We do it like this so that we can make sure
 // they are added in the correct order
-// Int -> HTMLElement -> Future Err [HTMLElement]
+// Int -> HTMLElement -> [HTMLElement]
 const createPagesElements = (pageCount, parent) => {
     removeAllChildren(parent);
 
@@ -60,7 +36,7 @@ const createButtons = (parent, zoom, rotate, blur) => {
 
     const doZoom = change => () => {
         zoomLevel = zoomLevel * change;
-        zoom(zoomLevel).fork(console.log, console.log);
+        zoom(zoomLevel);
     };
     const addRotation = change => () => {
         rotation = rotation + change;
@@ -103,54 +79,39 @@ const createButtons = (parent, zoom, rotate, blur) => {
 
 // -------------------------- PDF.js --------------------------
 
-// Ger a specific page form a PDF document
-// Int -> PDF -> Future Err Page
-const getPage = (pageNumber, pdf) =>
-    toFuture(`Unable to get page ${pageNumber}`, pdf.getPage(pageNumber));
-
 // Renders the page in the given HTMLElement
 // HTMLElement -> Page -> Int -> Future Err HTMLElement
 const renderPage = (canvas, page, scale) => {
     const viewport = page.getViewport(scale);
     canvas.height = viewport.height;
     canvas.width = viewport.width;
-    return toFuture(
-        "Error rendering page",
-        page
-            .render({ viewport, canvasContext: canvas.getContext("2d") })
-            .then(() => canvas)
-    );
+    return page
+        .render({ viewport, canvasContext: canvas.getContext("2d") })
+        .then(() => canvas);
 };
-
-// Create a PDF object from a specific source.
-// Source can be an ArrayBuffer or a URL string.
-// ArrayBuffer -> Future Err PDF
-const getDocument = source =>
-    toFuture("Unable to load Document", pdfjsLib.getDocument(source));
-
-// Downloads a resource and converts it to an ArrayBuffer
-// String -> Future Err ArrayBuffer
-const fetchAsArrayBuffer = url =>
-    toFuture("Unable to fetch PDF", fetch(url).then(r => r.arrayBuffer()));
 
 // ========= START ========
 
+// We will add our pages inside this element
 const pdfContainer = document.querySelector(".pdf-container");
 
-fetchAsArrayBuffer("./sample.pdf") // Get PDF file from url address
-    .chain(getDocument) // Pass PDF data as ArrayBuffer to PDF.js
-    .chain((
-        pdf // Get one Page object per document page
-    ) => parallel(rangeArray(1, pdf.numPages).map(n => getPage(n, pdf))))
-    .chain(pages => {
-        // Now that we have the pages we can just
-        // render them in a canvas element
+// Get PDF file from url address
+fetch("./sample.pdf")
+    .then(r => r.arrayBuffer())
+    // Pass PDF data as ArrayBuffer to PDF.js
+    .then(a => pdfjsLib.getDocument(a))
+    // Get one Page object per document page
+    .then(pdf =>
+        Promise.all(rangeArray(1, pdf.numPages).map(n => pdf.getPage(n)))
+    )
+    .then(pages => {
+        // We will create one canvas for each page.
         const canvasses = createPagesElements(pages.length, pdfContainer);
 
+        // Each time zoom is called all pages are re-rendered
+        // in their canvas elements.
         const zoom = val =>
-            parallel(
-                pages.map((page, idx) => renderPage(canvasses[idx], page, val))
-            );
+            pages.map((page, idx) => renderPage(canvasses[idx], page, val));
 
         const rotate = val =>
             canvasses.map(canvas => {
@@ -163,6 +124,8 @@ fetchAsArrayBuffer("./sample.pdf") // Get PDF file from url address
             });
 
         createButtons(document.body, zoom, rotate, blur);
+
+        // Now that we have the pages and canvasses we can just
+        // render them.
         return zoom(1);
-    })
-    .fork(console.log, console.log);
+    });
